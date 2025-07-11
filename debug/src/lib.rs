@@ -74,10 +74,10 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
             ));
         }
     }
-
     fmt_body_stream.extend(quote!(
         .finish()
     ));
+    eprint!("!!! Finish fields");
 
     let ret_stream = quote!(
         impl std::fmt::Debug for #struct_name_ident {
@@ -87,5 +87,6 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
         }
     );
 
+    eprint!("!!! return {:#?}", ret_stream);
     return Ok(ret_stream)
 }
