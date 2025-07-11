@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use syn::{self, spanned::Spanned};
 use quote::{ToTokens, quote};
+use std::io::{self, Write};
 
 #[proc_macro_derive(CustomDebug)]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -27,8 +28,29 @@ fn get_fields_from_derive_input(d: &syn::DeriveInput) -> syn::Result<&StructFiel
     Err(syn::Error::new_spanned(d, "Must define on a Struct, not Enum".to_string()))
 }
 
+fn generate_attr(field: &syn::Field) -> syn::Result<Option<String>> {
+    for attr in field.attrs.iter() {
+        if let Ok(syn::Meta::NameValue(nv)) = attr.parse_meta() {
+            eprint!("!!! nv {:#?}", nv);
+            io::stderr().flush().unwrap();
+            if let Some(id) = nv.path.get_ident() {
+                if id == "debug" {
+                    if let syn::Lit::Str(ref ident_str) = nv.lit {
+                        return Ok(Some(
+                            ident_str.value()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let fields = get_fields_from_derive_input(st)?;
+    eprint!("!!! fields {:#?}", fields);
+    io::stderr().flush().unwrap();
     let struct_name_ident = &st.ident;
     let struct_name_literal = struct_name_ident.to_string();
 
@@ -40,10 +62,17 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
     for field in fields.iter(){
         let field_name_idnet = field.ident.as_ref().unwrap();
         let field_name_literal = field_name_idnet.to_string();
-        
-        fmt_body_stream.extend(quote!(
-            .field(#field_name_literal, &self.#field_name_idnet)  // 这行同样注意literal和ident的区别
-        ));
+        if let Ok(Some(debug)) = generate_attr(field) {
+            eprint!("!!! Found");
+            fmt_body_stream.extend(quote!(
+                .field(#field_name_literal, &format_args!(#debug, self.#field_name_idnet))
+            ));
+        } else {
+            eprint!("!!! NoOK");
+            fmt_body_stream.extend(quote!(
+                .field(#field_name_literal, &self.#field_name_idnet)
+            ));
+        }
     }
 
     fmt_body_stream.extend(quote!(
