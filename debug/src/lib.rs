@@ -3,12 +3,23 @@ use syn::{self, spanned::Spanned};
 use quote::{ToTokens, quote};
 use std::io::{self, Write};
 
-#[proc_macro_derive(CustomDebug)]
+// Must have `attributes(debug)`, or
+// ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+// error: cannot find attribute `debug` in this scope
+//   --> tests/03-custom-format.rs:29:7
+//    |
+// 29 |     #[debug = "0b{:08b}"]
+//    |       ^^^^^
+// ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+#[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let st = syn::parse_macro_input!(input as syn::DeriveInput);
     match do_expand(&st) {
         Ok(token_stream) => token_stream.into(),
-        Err(e) => e.to_compile_error().into(),
+        Err(e) => {
+            e.to_compile_error().into()
+        },
     }
 }
 
