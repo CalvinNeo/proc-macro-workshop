@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use syn::{self, spanned::Spanned};
+use syn::{self, spanned::Spanned, parse_quote};
 use quote::{ToTokens, quote};
 use std::io::{self, Write};
 
@@ -58,7 +58,7 @@ fn generate_attr(field: &syn::Field) -> syn::Result<Option<String>> {
     Ok(None)
 }
 
-fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn generate_debug_trait_core(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let fields = get_fields_from_derive_input(st)?;
     eprint!("!!! fields {:#?}", fields);
     io::stderr().flush().unwrap();
@@ -89,9 +89,28 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
         .finish()
     ));
     eprint!("!!! Finish fields");
+    Ok(fmt_body_stream)
+}
 
+fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let fmt_body_stream = generate_debug_trait_core(st)?;
+    let struct_name_ident = &st.ident;
+
+    let mut generics_param_to_modify = st.generics.clone();
+    for mut g in generics_param_to_modify.params.iter_mut() {
+        if let syn::GenericParam::Type(t) = g {
+            let q = parse_quote!(std::fmt::Debug);
+            // t: Trait(TraitBound { paren_token: None, modifier: None, lifetimes: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { ident: "std", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "fmt", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "Debug", span: #5 bytes(862..873) }, arguments: None }] } })
+            t.bounds.push(q);
+        }
+    }
+
+    eprint!("!!! generics_param_to_modify {:?}", generics_param_to_modify);
+    let (impl_generics, type_generics, where_clause) = generics_param_to_modify.split_for_impl();
+
+    // impl<T: std::fmt::Debug> std::fmt::Debug for Field<T> {
     let ret_stream = quote!(
-        impl std::fmt::Debug for #struct_name_ident {
+        impl #impl_generics std::fmt::Debug for #struct_name_ident #type_generics #where_clause {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
                 #fmt_body_stream
             }
@@ -99,5 +118,5 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
     );
 
     eprint!("!!! return {:#?}", ret_stream);
-    return Ok(ret_stream)
+    Ok(ret_stream)
 }
