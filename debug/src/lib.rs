@@ -30,6 +30,7 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 type StructFields = syn::punctuated::Punctuated<syn::Field,syn::Token!(,)>;
 fn get_fields_from_derive_input(d: &syn::DeriveInput) -> syn::Result<&StructFields> {
+    eprint!("!!!! get_fields_from_derive_input {:#?}", d);
     if let syn::Data::Struct(syn::DataStruct {
         fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
         ..
@@ -60,7 +61,7 @@ fn generate_attr(field: &syn::Field) -> syn::Result<Option<String>> {
 
 fn generate_debug_trait_core(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let fields = get_fields_from_derive_input(st)?;
-    eprint!("!!! fields {:#?}", fields);
+    eprint!("!!! fields_core[{}] {:#?}", fields.len(), fields);
     io::stderr().flush().unwrap();
     let struct_name_ident = &st.ident;
     let struct_name_literal = struct_name_ident.to_string();
@@ -92,21 +93,70 @@ fn generate_debug_trait_core(st: &syn::DeriveInput) -> syn::Result<proc_macro2::
     Ok(fmt_body_stream)
 }
 
+fn get_field_type_name(field: &syn::Field) -> syn::Result<Option<String>> {
+    if let syn::Type::Path(syn::TypePath{path: syn::Path{ref segments, ..}, ..}) = field.ty {
+        if let Some(syn::PathSegment{ref ident,..}) = segments.last() {
+            eprint!("!!! ident: {:?}", ident);
+            return Ok(Some(ident.to_string()))
+        }
+    }
+    return Ok(None)
+}
+
 fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let fmt_body_stream = generate_debug_trait_core(st)?;
     let struct_name_ident = &st.ident;
 
     let mut generics_param_to_modify = st.generics.clone();
-    for mut g in generics_param_to_modify.params.iter_mut() {
-        if let syn::GenericParam::Type(t) = g {
-            let q = parse_quote!(std::fmt::Debug);
-            // t: Trait(TraitBound { paren_token: None, modifier: None, lifetimes: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { ident: "std", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "fmt", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "Debug", span: #5 bytes(862..873) }, arguments: None }] } })
-            t.bounds.push(q);
+
+    let fields = get_fields_from_derive_input(st)?;
+    let mut field_type_names = Vec::new();
+    let mut phantomdata_type_param_names = Vec::new();
+    eprint!("!!!! fields {} {:?}", fields.len(), fields);
+    for field in fields {
+        if let Some(s) = get_field_type_name(field)? {
+            eprint!("!!!! field_type_names.push {:?}", s);
+            field_type_names.push(s);
+        }
+        if let Some(s) = get_phantomdata_generic_type_name(field)? {
+            eprint!("!!!! phantomdata_type_param_names.push {:?}", s);
+            phantomdata_type_param_names.push(s);
         }
     }
 
+    for mut g in generics_param_to_modify.params.iter_mut() {
+        if let syn::GenericParam::Type(t) = g {
+            let type_param_name = t.ident.to_string();
+            // #[derive(CustomDebug)]
+            // pub struct Field<T> {
+            //     marker: PhantomData<T>,
+            //     string: S,
+            //     #[debug = "0b{:08b}"]
+            //     bitmask: u8,
+            // }
+            // phantomdata_type_param_names [] field_type_names ["T", "u8"] type_param_name "T"
+            if phantomdata_type_param_names.contains(&type_param_name) && !field_type_names.contains(&type_param_name) {
+                eprint!("!!! CONT phantomdata_type_param_names {:?} field_type_names {:?} type_param_name {:?}", phantomdata_type_param_names, field_type_names, type_param_name);
+                continue;
+            } else {
+                eprint!("!!! NOCONT phantomdata_type_param_names {:?} field_type_names {:?} type_param_name {:?}", phantomdata_type_param_names, field_type_names, type_param_name);
+            }
+            t.bounds.push(parse_quote!(std::fmt::Debug));
+        }
+    }
+
+    // for mut g in generics_param_to_modify.params.iter_mut() {
+    //     if let syn::GenericParam::Type(t) = g {
+    //         let q = parse_quote!(std::fmt::Debug);
+    //         // t: Trait(TraitBound { paren_token: None, modifier: None, lifetimes: None, path: Path { leading_colon: None, segments: [PathSegment { ident: Ident { ident: "std", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "fmt", span: #5 bytes(862..873) }, arguments: None }, Colon2, PathSegment { ident: Ident { ident: "Debug", span: #5 bytes(862..873) }, arguments: None }] } })
+    //         t.bounds.push(q);
+    //     }
+    // }
+
     eprint!("!!! generics_param_to_modify {:?}", generics_param_to_modify);
     let (impl_generics, type_generics, where_clause) = generics_param_to_modify.split_for_impl();
+
+    eprint!("!!! impl_generics {:?}", impl_generics);
 
     // impl<T: std::fmt::Debug> std::fmt::Debug for Field<T> {
     let ret_stream = quote!(
@@ -117,6 +167,29 @@ fn generate_debug_trait(st: &syn::DeriveInput) -> syn::Result<proc_macro2::Token
         }
     );
 
-    eprint!("!!! return {:#?}", ret_stream);
+    // eprint!("!!! return {:#?}", ret_stream);
     Ok(ret_stream)
+}
+
+fn get_phantomdata_generic_type_name(field: &syn::Field) -> syn::Result<Option<String>> {
+    if let syn::Type::Path(syn::TypePath{path: syn::Path{ref segments, ..}, ..}) = field.ty {
+        // eprint!("!!! get_phantomdata_generic_type_name 111 {:?}", field);
+        if let Some(syn::PathSegment{ref ident, ref arguments}) = segments.last() {
+            // eprint!("!!! get_phantomdata_generic_type_name 222");
+            if ident == "PhantomData" {
+                // eprint!("!!! get_phantomdata_generic_type_name 333");
+                if let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments{args, ..}) = arguments {
+                    // eprint!("!!! get_phantomdata_generic_type_name 444");
+                    if let Some(syn::GenericArgument::Type(syn::Type::Path( ref gp))) = args.first() {
+                        // eprint!("!!! get_phantomdata_generic_type_name 555");
+                        if let Some(generic_ident) = gp.path.segments.first() {
+                            // eprint!("!!! get_phantomdata_generic_type_name 666");
+                            return Ok(Some(generic_ident.ident.to_string()))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return Ok(None)
 }
